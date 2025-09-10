@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asistente de Decisiones Empresariales</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        
+        .message-content pre {
+            background: rgba(0,0,0,0.1);
+            padding: 8px 12px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 14px;
+        }
+        
+        .message-content p {
+            margin-bottom: 8px;
+            line-height: 1.5;
+        }
+        
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #6b7280;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+        
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+        .typing-dot:nth-child(3) { animation-delay: 0; }
+        
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.1);
+            border-radius: 3px;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(0,0,0,0.3);
+            border-radius: 3px;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        
+        const ChatbotDecisiones = () => {
+            const [messages, setMessages] = useState([]);
+            const [input, setInput] = useState('');
+            const [selectedLevel, setSelectedLevel] = useState(1);
+            const [loading, setLoading] = useState(false);
+            const [isConnected, setIsConnected] = useState(false);
+            const [showHistory, setShowHistory] = useState(false);
+            const messagesEndRef = useRef(null);
+            const textareaRef = useRef(null);
+
+            // Historial de conversaciones (simulado con localStorage)
+            const [conversations, setConversations] = useState([]);
+            const [currentConversationId, setCurrentConversationId] = useState(null);
+
+            // Cargar historial al iniciar
+            useEffect(() => {
+                const savedConversations = JSON.parse(localStorage.getItem('chatbot-conversations') || '[]');
+                setConversations(savedConversations);
+                
+                if (savedConversations.length > 0) {
+                    const lastConversation = savedConversations[0];
+                    setCurrentConversationId(lastConversation.id);
+                    setMessages(lastConversation.messages || []);
+                }
+            }, []);
+
+            // Verificar conexión con Ollama al cargar
+            useEffect(() => {
+                checkOllamaConnection();
+            }, []);
+
+            // Auto-scroll al final
+            useEffect(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, [messages]);
+
+            // Auto-resize textarea
+            useEffect(() => {
+                if (textareaRef.current) {
+                    textareaRef.current.style.height = 'auto';
+                    textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
+                }
+            }, [input]);
+
+            const levelPrompts = {
+                1: {
+                    name: "Respuesta Directa",
+                    icon: "⚡",
+                    color: "bg-red-500",
+                    bgColor: "bg-red-50",
+                    textColor: "text-red-700",
+                    description: "Respuesta rápida y concisa",
+                    prompt: "Actúa como un asesor ejecutivo directo. Proporciona una respuesta clara y concisa en máximo 2 oraciones. Da una recomendación actionable sin justificaciones extensas. Responde en español. Pregunta del usuario:"
+                },
+                2: {
+                    name: "Respuesta Analítica", 
+                    icon: "📊",
+                    color: "bg-blue-500",
+                    bgColor: "bg-blue-50",
+                    textColor: "text-blue-700",
+                    description: "Análisis con datos y factores",
+                    prompt: "Actúa como un analista de datos empresarial. Proporciona un análisis respaldado por factores clave (menciona 2-3 factores importantes) y termina con una recomendación clara. Responde en español. Pregunta del usuario:"
+                },
+                3: {
+                    name: "Respuesta Estratégica",
+                    icon: "🎯",
+                    color: "bg-green-500", 
+                    bgColor: "bg-green-50",
+                    textColor: "text-green-700",
+                    description: "Análisis completo y estratégico",
+                    prompt: "Actúa como un consultor estratégico senior. Proporciona un análisis completo considerando múltiples escenarios, tendencias de mercado, riesgos asociados y un plan de implementación por fases para decisiones a largo plazo. Responde en español. Pregunta del usuario:"
+                }
+            };
+
+            const checkOllamaConnection = async () => {
+                try {
+                    const response = await fetch('http://127.0.0.1:11434/api/tags');
+                    setIsConnected(response.ok);
+                } catch (error) {
+                    setIsConnected(false);
+                }
+            };
+
+            const callOllama = async (prompt) => {
+                try {
+                    const response = await fetch('http://127.0.0.1:11434/api/generate', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            model: 'qwen2:1.5b',
+                            prompt: prompt,
+                            stream: false
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error('Error en la conexión con Ollama');
+                    }
+
+                    const data = await response.json();
+                    return data.response;
+                } catch (error) {
+                    return `❌ Error de conexión: ${error.message}\n\nPasos para solucionarlo:\n1. Verifica que Ollama esté corriendo: ollama serve\n2. Asegúrate de tener CORS habilitado: export OLLAMA_ORIGINS="*"\n3. Recarga esta página`;
+                }
+            };
+
+            const saveConversation = (newMessages) => {
+                const conversationData = {
+                    id: currentConversationId || Date.now().toString(),
+                    title: newMessages.find(m => m.type === 'user')?.content.slice(0, 50) + '...' || 'Nueva conversación',
+                    messages: newMessages,
+                    lastUpdate: new Date().toISOString()
+                };
+
+                const updatedConversations = [
+                    conversationData,
+                    ...conversations.filter(conv => conv.id !== conversationData.id)
+                ].slice(0, 20); // Máximo 20 conversaciones
+
+                setConversations(updatedConversations);
+                setCurrentConversationId(conversationData.id);
+                localStorage.setItem('chatbot-conversations', JSON.stringify(updatedConversations));
+            };
+
+            const startNewConversation = () => {
+                setMessages([]);
+                setCurrentConversationId(null);
+                setShowHistory(false);
+            };
+
+            const loadConversation = (conversation) => {
+                setMessages(conversation.messages);
+                setCurrentConversationId(conversation.id);
+                setShowHistory(false);
+            };
+
+            const deleteConversation = (conversationId, e) => {
+                e.stopPropagation();
+                const updatedConversations = conversations.filter(conv => conv.id !== conversationId);
+                setConversations(updatedConversations);
+                localStorage.setItem('chatbot-conversations', JSON.stringify(updatedConversations));
+                
+                if (currentConversationId === conversationId) {
+                    startNewConversation();
+                }
+            };
+
+            const handleSend = async () => {
+                if (!input.trim() || loading) return;
+
+                const userMessage = {
+                    id: Date.now(),
+                    type: 'user',
+                    content: input,
+                    level: selectedLevel,
+                    timestamp: new Date().toLocaleTimeString()
+                };
+
+                const newMessages = [...messages, userMessage];
+                setMessages(newMessages);
+                setLoading(true);
+                setInput('');
+
+                const fullPrompt = levelPrompts[selectedLevel].prompt + " " + input;
+                const aiResponse = await callOllama(fullPrompt);
+
+                const aiMessage = {
+                    id: Date.now() + 1,
+                    type: 'ai',
+                    content: aiResponse,
+                    level: selectedLevel,
+                    timestamp: new Date().toLocaleTimeString()
+                };
+
+                const finalMessages = [...newMessages, aiMessage];
+                setMessages(finalMessages);
+                saveConversation(finalMessages);
+                setLoading(false);
+            };
+
+            const handleKeyPress = (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                }
+            };
+
+            const formatMessage = (content) => {
+                return content.split('\n').map((line, index) => (
+                    <p key={index} className="mb-2 last:mb-0">
+                        {line || <br />}
+                    </p>
+                ));
+            };
+
+            return (
+                <div className="h-screen bg-white flex">
+                    {/* Sidebar de historial */}
+                    <div className={`${showHistory ? 'w-80' : 'w-0'} overflow-hidden transition-all duration-300 bg-gray-50 border-r border-gray-200`}>
+                        <div className="p-4 border-b border-gray-200">
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="font-semibold text-gray-900">Historial</h2>
+                                <button
+                                    onClick={() => setShowHistory(false)}
+                                    className="text-gray-500 hover:text-gray-700"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                            <button
+                                onClick={startNewConversation}
+                                className="w-full bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors"
+                            >
+                                + Nueva conversación
+                            </button>
+                        </div>
+                        <div className="overflow-y-auto custom-scrollbar h-full pb-20">
+                            {conversations.map((conversation) => (
+                                <div
+                                    key={conversation.id}
+                                    onClick={() => loadConversation(conversation)}
+                                    className={`p-3 cursor-pointer hover:bg-gray-100 border-b border-gray-100 ${
+                                        currentConversationId === conversation.id ? 'bg-blue-50' : ''
+                                    }`}
+                                >
+                                    <div className="flex items-start justify-between">
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-sm font-medium text-gray-900 truncate">
+                                                {conversation.title}
+                                            </p>
+                                            <p className="text-xs text-gray-500">
+                                                {new Date(conversation.lastUpdate).toLocaleDateString()}
+                                            </p>
+                                        </div>
+                                        <button
+                                            onClick={(e) => deleteConversation(conversation.id, e)}
+                                            className="ml-2 text-gray-400 hover:text-red-500 text-xs"
+                                        >
+                                            🗑️
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Área principal */}
+                    <div className="flex-1 flex flex-col">
+                        {/* Header */}
+                        <div className="bg-white border-b border-gray-200 px-6 py-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-4">
+                                    <button
+                                        onClick={() => setShowHistory(!showHistory)}
+                                        className="text-gray-500 hover:text-gray-700"
+                                    >
+                                        📝
+                                    </button>
+                                    <div>
+                                        <h1 className="text-xl font-semibold text-gray-900">
+                                            Asistente de Decisiones Empresariales
+                                        </h1>
+                                        <div className="flex items-center gap-2">
+                                            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                            <span className="text-sm text-gray-500">
+                                                {isConnected ? 'Conectado a Ollama' : 'Desconectado'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={startNewConversation}
+                                    className="text-gray-500 hover:text-gray-700 text-sm"
+                                >
+                                    + Nueva
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Selector de nivel */}
+                        <div className="bg-gray-50 px-6 py-3 border-b border-gray-200">
+                            <div className="flex gap-2 overflow-x-auto">
+                                {Object.entries(levelPrompts).map(([level, config]) => (
+                                    <button
+                                        key={level}
+                                        onClick={() => setSelectedLevel(parseInt(level))}
+                                        className={`flex items-center gap-2 px-4 py-2 rounded-lg whitespace-nowrap transition-all ${
+                                            selectedLevel === parseInt(level)
+                                                ? `${config.bgColor} ${config.textColor} shadow-sm`
+                                                : 'bg-white text-gray-600 hover:bg-gray-100'
+                                        }`}
+                                    >
+                                        <span className="text-lg">{config.icon}</span>
+                                        <div className="text-left">
+                                            <div className="font-medium text-sm">{config.name}</div>
+                                            <div className="text-xs opacity-75">{config.description}</div>
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Área de chat */}
+                        <div className="flex-1 overflow-y-auto custom-scrollbar px-6 py-4">
+                            {messages.length === 0 ? (
+                                <div className="flex items-center justify-center h-full">
+                                    <div className="text-center max-w-md">
+                                        <div className="text-6xl mb-6">🤖</div>
+                                        <h2 className="text-2xl font-semibold text-gray-900 mb-4">
+                                            ¡Hola! Soy tu asistente de decisiones
+                                        </h2>
+                                        <p className="text-gray-600 mb-6">
+                                            Hazme preguntas sobre decisiones empresariales y selecciona el nivel de análisis que necesites.
+                                        </p>
+                                        <div className="bg-gray-50 rounded-lg p-4 text-left">
+                                            <h3 className="font-medium text-gray-900 mb-2">Ejemplos:</h3>
+                                            <ul className="text-sm text-gray-600 space-y-1">
+                                                <li>• "¿Debo contratar más personal o automatizar?"</li>
+                                                <li>• "¿Cómo mejorar la retención de clientes?"</li>
+                                                <li>• "¿Expandir a nuevos mercados este año?"</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="space-y-6 max-w-4xl mx-auto">
+                                    {messages.map((message) => (
+                                        <div
+                                            key={message.id}
+                                            className={`flex gap-4 ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
+                                        >
+                                            {message.type === 'ai' && (
+                                                <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-medium text-sm">
+                                                    AI
+                                                </div>
+                                            )}
+                                            <div
+                                                className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                                                    message.type === 'user'
+                                                        ? 'bg-blue-500 text-white'
+                                                        : 'bg-white border border-gray-200 text-gray-900'
+                                                }`}
+                                            >
+                                                {message.type === 'ai' && (
+                                                    <div className={`flex items-center gap-2 mb-2 text-xs ${levelPrompts[message.level].textColor}`}>
+                                                        <span>{levelPrompts[message.level].icon}</span>
+                                                        <span className="font-medium">{levelPrompts[message.level].name}</span>
+                                                    </div>
+                                                )}
+                                                <div className="message-content">
+                                                    {formatMessage(message.content)}
+                                                </div>
+                                                <div className={`text-xs mt-2 opacity-70`}>
+                                                    {message.timestamp}
+                                                </div>
+                                            </div>
+                                            {message.type === 'user' && (
+                                                <div className="w-8 h-8 bg-gray-500 rounded-full flex items-center justify-center text-white font-medium text-sm">
+                                                    Tú
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                    
+                                    {loading && (
+                                        <div className="flex gap-4 justify-start">
+                                            <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-medium text-sm">
+                                                AI
+                                            </div>
+                                            <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3">
+                                                <div className={`flex items-center gap-2 mb-2 text-xs ${levelPrompts[selectedLevel].textColor}`}>
+                                                    <span>{levelPrompts[selectedLevel].icon}</span>
+                                                    <span className="font-medium">{levelPrompts[selectedLevel].name}</span>
+                                                </div>
+                                                <div className="typing-indicator">
+                                                    <div className="typing-dot"></div>
+                                                    <div className="typing-dot"></div>
+                                                    <div className="typing-dot"></div>
+                                                    <span className="ml-2 text-gray-500 text-sm">Analizando...</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                    <div ref={messagesEndRef} />
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Input area */}
+                        <div className="border-t border-gray-200 bg-white px-6 py-4">
+                            <div className="max-w-4xl mx-auto">
+                                <div className="flex gap-3 items-end">
+                                    <div className="flex-1 relative">
+                                        <textarea
+                                            ref={textareaRef}
+                                            value={input}
+                                            onChange={(e) => setInput(e.target.value)}
+                                            onKeyPress={handleKeyPress}
+                                            placeholder="Escribe tu pregunta empresarial aquí..."
+                                            className="w-full p-3 pr-12 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none max-h-32 min-h-[48px]"
+                                            disabled={loading}
+                                            rows={1}
+                                        />
+                                    </div>
+                                    <button
+                                        onClick={handleSend}
+                                        disabled={!input.trim() || loading || !isConnected}
+                                        className="w-12 h-12 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl transition-colors flex items-center justify-center"
+                                    >
+                                        <span className="text-lg">➤</span>
+                                    </button>
+                                </div>
+                                <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
+                                    <span>
+                                        Nivel actual: <strong>{levelPrompts[selectedLevel].name}</strong>
+                                    </span>
+                                    <span>Presiona Enter para enviar</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<ChatbotDecisiones />, document.getElementById('root'));
+    </script>
+</body>
+</html>
